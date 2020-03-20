@@ -20,9 +20,9 @@ const GroupsPlugin = require('./lib/groups');
 const NetworkMapPlugin = require('./lib/networkmap');
 const DeveloperPlugin = require('./lib/developer');
 const BindingPlugin = require('./lib/binding');
+const OtaPlugin = require('./lib/ota');
 const ZigbeeController = require('./lib/zigbeecontroller');
 const StatesController = require('./lib/statescontroller');
-
 
 class Zigbee extends utils.Adapter {
     /**
@@ -46,6 +46,7 @@ class Zigbee extends utils.Adapter {
             new NetworkMapPlugin(this),
             new DeveloperPlugin(this),
             new BindingPlugin(this),
+            new OtaPlugin(this),
         ];
     }
 
@@ -109,7 +110,9 @@ class Zigbee extends utils.Adapter {
         this.setState('info.connection', true);
         const devices = await this.zbController.getClients(false);
         for (const device of devices) {
-            this.stController.syncDevStates(device);
+            this.stController.updateDev(device.ieeeAddr.substr(2), device.modelID, device.modelID, () => {
+                  this.stController.syncDevStates(device);
+            });
         }
         this.callPluginMethod('start', [this.zbController, this.stController]);
     }
@@ -238,7 +241,7 @@ class Zigbee extends utils.Adapter {
             }
             this.log.debug(`target: ${safeJsonStringify(target)}`);
             const meta = {
-                endpoint_name: '',
+                endpoint_name: epName,
                 options: preparedOptions,
                 device: entity.device,
                 mapped: mappedModel,

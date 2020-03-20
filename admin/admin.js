@@ -16,7 +16,8 @@ var Materialize = (typeof M !== 'undefined') ? M : Materialize,
     groups = {},
     devGroups = {},
     onChangeEmitter,
-    binding = [];
+    binding = [],
+    cidList;
 
 function getDeviceByID(ID) {
     return devices.find((devInfo) => {
@@ -63,11 +64,6 @@ function getCard(dev) {
         }
     }
     room = rooms.join(',') || '&nbsp';
-    let routeBtn = '';
-    if (dev.info && dev.info.device._type == 'Router') {
-        routeBtn = '<a name="join" class="btn-floating waves-effect waves-light right hoverable green"><i class="material-icons tiny">leak_add</i></a>';
-    }
-
     var paired = (dev.paired) ? '' : '<i class="material-icons right">leak_remove</i>';
     var rid = id.split('.').join('_');
     var image = `<img src="${img_src}" width="80px">`,
@@ -84,10 +80,7 @@ function getCard(dev) {
         				<li><span class="label">groups:</span><span>${dev.groupNames || ''}</span></li>
         			</ul>
         		</div>`,
-        buttons = `<a name="delete" class="btn-floating waves-effect waves-light right hoverable black">
-            <i class="material-icons tiny">delete</i></a>
-            <a name="edit" class="btn-floating waves-effect waves-light right hoverable blue small">
-                <i class="material-icons small">mode_edit</i></a>${routeBtn}`,
+        permitJoinBtn = (dev.info && dev.info.device._type == 'Router') ? '<button name="join" class="btn-floating btn-small waves-effect waves-light right hoverable green"><i class="material-icons tiny">leak_add</i></button>' : '',
         infoBtn = (nwk) ? `<button name="info" class="left btn-flat btn-small"><i class="material-icons icon-blue">info</i></button>` : '';
         card = `<div id="${id}" class="device col s12 m6 l4 xl3">
                   <div class="card hoverable">
@@ -101,19 +94,21 @@ function getCard(dev) {
                         <!--/a--!>
                         <span id="dName" class="card-title truncate">${title}</span><!--${paired}--!>
                         <i class="left">${image}</i>
-                        ${info}<!--${buttons}--!>
+                        ${info}
                         <div class="footer right-align"></div>
                     </div>
                     <div class="card-action">
 	                    <div class="card-reveal-buttons">
 	                    	${infoBtn}
 	                    	<span class="left" style="padding-top:8px">${room}</span>
+                            <span class="left fw_info"></span>
 	                    	<button name="delete" class="right btn-flat btn-small">
 	                    		<i class="material-icons icon-black">delete</i>
 	                    	</button>
 	                    	<button name="edit" class="right btn-flat btn-small">
 	                    		<i class="material-icons icon-green">edit</i>
 	                    	</button>
+                            ${permitJoinBtn}
 	                	</div>
 	                </div>
                     <div class="card-reveal" name="info">
@@ -305,7 +300,7 @@ function showDevices() {
             name = getDevName(dev_block);
         editName(id, name);
     });
-    $("a.btn-floating[name='join']").click(function() {
+    $("button.btn-floating[name='join']").click(function() {
         var dev_block = $(this).parents("div.device");
         if (!$('#pairing').hasClass('pulse'))
             joinProcess(getDevId(dev_block));
@@ -325,6 +320,50 @@ function showDevices() {
 
     showNetworkMap(devices, map);
     translateAll();
+}
+
+function checkFwUpdate() {
+    const deviceCards = getDeviceCards();
+    const getFwInfoNode = function(deviceCard) {
+        return deviceCard.find('.fw_info');
+    };
+    const createBtn = function(icon, hint, disabled, color) {
+        const disabledAttr = disabled ? '[disabled]="true"' : '';
+        if (!color) {
+            color = !disabled ? 'icon-green' : '';
+        }
+        return `<button name="fw_update" class="left btn-flat btn-small" title="${hint}" ${disabledAttr}>
+            <i class="material-icons ${color}">${icon}</i></button>`;
+    };
+    const callback = function(msg) {
+        if (msg) {
+            const deviceCard = getDeviceCard(msg.device);
+            const devId = getDevId(deviceCard.attr("id"));
+            const fwInfoNode = getFwInfoNode(deviceCard);
+            if (msg.status == 'available') {
+                fwInfoNode.html(createBtn('system_update', 'Click to start firmware update', false));
+                $(fwInfoNode).find("button[name='fw_update']").click(function(e) {
+                    fwInfoNode.html(createBtn('check_circle', 'Firmware update started, check progress in logs.', true, 'icon-blue'));
+                    sendTo(namespace, 'startOta', {devId: devId}, function(msg) {
+                        fwInfoNode.html(createBtn('check_circle', 'Finished, see logs.', true));
+                        console.log(msg);
+                    });
+                });
+            } else if (msg.status == 'not_available') {
+                fwInfoNode.html(createBtn('check_circle', 'Up-to-date', true));
+            } else if (msg.status == 'fail') {
+                fwInfoNode.html(createBtn('check_circle', 'Firmware check failed, '+msg.msg, true, 'icon-red'));
+            } else {
+                fwInfoNode.html(createBtn('not_interested', 'No firmware update available', true));
+            }
+        }
+    };
+    for (var i=0;i < deviceCards.length; i++) {
+        const deviceCard = $(deviceCards[i]);
+        const devId = getDevId(deviceCard.attr("id"));
+        getFwInfoNode(deviceCard).html('<span class="left" style="padding-top:8px">checking...</span>');
+        sendTo(namespace, 'checkOtaAvail', {devId: devId}, callback);
+    }
 }
 
 function letsPairing() {
@@ -401,6 +440,17 @@ function getDevices() {
     });
 }
 
+function getDeviceCards() {
+    return $('#devices .device');
+}
+
+function getDeviceCard(devId) {
+    if (devId.startsWith('0x')) {
+        devId = devId.substr(2, devId.length);
+    }
+    return $('#devices').find(`div[id='${namespace}.${devId}']`);
+}
+
 function getMap() {
     $('#refresh').addClass('disabled');
     sendTo(namespace, 'getMap', {}, function (msg) {
@@ -453,6 +503,9 @@ function load(settings, onChange) {
     // Signal to admin, that no changes yet
     onChange(false);
 
+    $('#fw_check_btn').click(function() {
+        checkFwUpdate();
+    });
     $('#pairing').click(function() {
         if (!$('#pairing').hasClass('pulse'))
             letsPairing();
@@ -489,6 +542,7 @@ function load(settings, onChange) {
         $('.dropdown-trigger').dropdown({constrainWidth: false});
         Materialize.updateTextFields();
         $('.collapsible').collapsible();
+        $('.tooltipped').tooltip();
     });
 
     var text = $('#pairing').attr('data-tooltip');
@@ -508,6 +562,10 @@ function load(settings, onChange) {
 
     $('#add_binding').click(function() {
         addBindingDialog();
+    });
+
+    sendTo(namespace, 'getLibData', {key: 'cidList'}, function (data) {
+        cidList = data.list;
     });
 }
 
@@ -1832,6 +1890,15 @@ function deleteBinding(id) {
     });
 }
 
+function findClName(id) {
+    for (let key in cidList) {
+        if (cidList.hasOwnProperty(key) && cidList[key].ID == id) {
+            return `${key} (${id})`;
+        }
+    }
+    return id;
+}
+
 function genDevInfo(device) {
     //console.log(device);
     const dev = (device && device.info) ? device.info.device : undefined;
@@ -1842,6 +1909,18 @@ function genDevInfo(device) {
             return '';
         } else {
             return `<li><span class="labelinfo">${name}:</span><span>${value}</span></li>`;
+        }
+    }
+    const genRowValues = function(name, value) {
+        if (value === undefined) {
+            return '';
+        } else {
+            let label = `${name}:`;
+            return value.map((val) => {
+                const row = `<li><span class="labelinfo">${label}</span><span>${val}</span></li>`;
+                label = '';
+                return row;
+            }).join('');
         }
     }
     const mappedInfo = (!mapped) ? '' : 
@@ -1861,8 +1940,8 @@ function genDevInfo(device) {
                 <ul>
                     ${genRow('endpoint', ep.ID)}
                     ${genRow('profile', ep.profileID)}
-                    ${genRow('input clusters', ep.inputClusters)}
-                    ${genRow('output clusters', ep.outputClusters)}
+                    ${genRowValues('input clusters', ep.inputClusters.map(findClName))}
+                    ${genRowValues('output clusters', ep.outputClusters.map(findClName))}
                 </ul>
             </div>`;
     }
